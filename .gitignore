@@ -1,0 +1,13 @@
+/.venv/
+venv/
+__pycache__/
+*.pyc
+.vscode/
+env/
+.env
+data/index.faiss
+data/index.faiss.meta.pkl
+*.pkl
+.DS_Store
+node_modules/
+package-lock.json
