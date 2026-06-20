@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 
 from src.agent.classifier import classify_persona_llm
 from src.agent.escalation import load_escalation_config, make_handoff_summary, should_escalate
+from src.agent.feedback import log_feedback, log_interaction
 from src.agent.ingest import build_index
 from src.agent.rag import RAG
+from src.agent.sentiment import analyze_sentiment
 
 load_dotenv()
 
@@ -48,6 +50,7 @@ if st.button("Send") and query.strip():
     for s, sc in zip(formatted_sources, scores):
         st.write(f"- {s} (score={sc:.3f})")
 
+    sentiment = analyze_sentiment(query)
     resp = rag.generate_response(persona, query, retrieved)
     escalate, reason = should_escalate(
         [r[1] for r in retrieved],
@@ -56,6 +59,7 @@ if st.button("Send") and query.strip():
         convo_turns=1,
         config=config,
     )
+    st.markdown(f"**Sentiment:** {sentiment['label']} (score={sentiment['score']:.1f})")
     st.markdown(f"**Escalation:** {escalate} ({reason})")
     st.markdown("---")
     st.markdown("**Agent response**")
@@ -73,3 +77,15 @@ if st.button("Send") and query.strip():
         )
         st.markdown("**Handoff Summary**")
         st.json(summary)
+    elif reason == "greeting":
+        st.info("No escalation is required for this greeting. Please describe your issue in more detail.")
+    elif not formatted_sources:
+        st.warning("No matching source documents were found. Try adding more context or a clearer description.")
+
+    feedback = st.text_area("Optional feedback for this interaction", height=80)
+    if st.button("Submit feedback"):
+        if feedback.strip():
+            log_feedback(query, persona, confidence, max(scores) if scores else 0.0, sentiment, escalate, reason, feedback)
+            st.success("Thank you! Feedback recorded.")
+        else:
+            st.warning("Please enter feedback before submitting.")

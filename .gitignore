@@ -11,3 +11,4 @@ data/index.faiss.meta.pkl
 .DS_Store
 node_modules/
 package-lock.json
+artifacts/

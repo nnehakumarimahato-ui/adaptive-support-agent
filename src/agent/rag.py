@@ -10,6 +10,7 @@ except Exception:
     HAS_VECTOR = False
 
 from .classifier import classify_persona_llm
+from .escalation import is_simple_interaction
 from .ingest import load_documents, chunk_text
 
 OPENAI_KEY_ENV = "OPENAI_API_KEY"
@@ -34,7 +35,8 @@ class RAG:
             self.metadatas = meta["metadatas"]
             self.texts = meta["texts"]
             self.model_name = meta.get("model_name", DEFAULT_MODEL)
-            self.model = SentenceTransformer(self.model_name)
+            # Lazy-load the SentenceTransformer to avoid heavy imports at module load time.
+            self.model = None
         else:
             # Simple in-memory retriever: load and chunk documents directly
             self.is_simple = True
@@ -52,6 +54,15 @@ class RAG:
     def retrieve(self, query: str, k: int = 4) -> List[Tuple[float, Dict]]:
         results: List[Tuple[float, Dict]] = []
         if not self.is_simple:
+            # Load the embedding model on first use to speed up startup.
+            if self.model is None:
+                try:
+                    from sentence_transformers import SentenceTransformer
+
+                    self.model = SentenceTransformer(self.model_name)
+                except Exception:
+                    raise RuntimeError("Failed to load embedding model. Ensure sentence-transformers is installed.")
+
             q_emb = self.model.encode([query], convert_to_numpy=True)
             faiss.normalize_L2(q_emb)
             D, I = self.index.search(q_emb, k)
@@ -82,8 +93,7 @@ class RAG:
             results.append((float(score), metadata))
         return results
 
-    def generate_response(self, persona: str, query: str, retrieved: List[Tuple[float, Dict]]) -> Dict:
-        openai_key = os.getenv(OPENAI_KEY_ENV)
+    def _format_source_texts(self, retrieved: List[Tuple[float, Dict]]) -> Tuple[str, List[str]]:
         source_texts = []
         sources = []
         for score, chunk in retrieved:
@@ -94,69 +104,87 @@ class RAG:
             if page:
                 header += f" | Page: {page}"
             source_texts.append(f"{header}\n{chunk.get('text', '').strip()}")
+        return "\n\n---\n\n".join(source_texts), list(dict.fromkeys(sources))
 
-        if not retrieved:
+    def _fallback_answer(self, query: str) -> Dict:
+        if is_simple_interaction(query):
             answer = (
-                "I couldn't find a matching article in the knowledge base for this issue. "
-                "This should be escalated to a human support agent with a handoff summary."
+                "Hello there! I didn't find any matching knowledge base articles for this short message. "
+                "Please describe your issue in a few sentences so I can assist you further."
             )
-            return {"persona": persona, "answer": answer, "sources": []}
+            return {"persona": "", "answer": answer, "sources": []}
 
-        combined_text = "\n\n---\n\n".join(source_texts)
+        answer = (
+            "I couldn't find a matching article in the knowledge base for this issue. "
+            "This should be escalated to a human support agent with a handoff summary."
+        )
+        return {"persona": "", "answer": answer, "sources": []}
+
+    def _openai_answer(self, persona: str, query: str, persona_instruction: str, combined_text: str) -> str:
+        import openai
+
+        openai.api_key = os.getenv(OPENAI_KEY_ENV)
+        system = (
+            "You are a customer support assistant. Use ONLY the provided source text to answer. "
+            "Do NOT hallucinate or invent details. If the answer is not present in the source text, say that the knowledge base does not contain enough details and recommend escalation. "
+            "Keep the tone aligned to the detected persona."
+        )
+        prompt = (
+            f"Persona: {persona}\n"
+            f"Persona guidance: {persona_instruction}\n"
+            f"User query: {query}\n\n"
+            f"Sources:\n{combined_text}\n\n"
+            "Answer strictly from sources and include a short sources list."
+        )
+        resp = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        return resp["choices"][0]["message"]["content"].strip()
+
+    def _default_answer(self, persona: str, combined_text: str) -> str:
+        if persona == "Technical Expert":
+            return (
+                "I found relevant technical guidance in the knowledge base. Review the details below and follow the recommended steps:\n\n"
+                + combined_text
+            )
+        if persona == "Frustrated User":
+            return (
+                "I understand how frustrating this is. Here is the information I found and the actions we can take next:\n\n"
+                + combined_text
+            )
+        return (
+            "Here is a concise summary of the relevant information and a recommended next step:\n\n"
+            + combined_text
+        )
+
+    def generate_response(self, persona: str, query: str, retrieved: List[Tuple[float, Dict]]) -> Dict:
+        if not retrieved:
+            response = self._fallback_answer(query)
+            return {"persona": persona, "answer": response["answer"], "sources": response["sources"]}
+
+        combined_text, sources = self._format_source_texts(retrieved)
         persona_instruction = PERSONA_INSTRUCTIONS.get(persona, "Provide a helpful support response.")
 
+        openai_key = os.getenv(OPENAI_KEY_ENV)
+        answer = None
         if openai_key is not None:
             try:
-                import openai
-
-                openai.api_key = openai_key
                 cls = classify_persona_llm(query)
                 persona = cls.get("persona", persona)
             except Exception:
                 pass
 
             try:
-                import openai
-
-                openai.api_key = openai_key
-                system = (
-                    "You are a customer support assistant. Use ONLY the provided source text to answer. "
-                    "Do NOT hallucinate or invent details. If the answer is not present in the source text, say that the knowledge base does not contain enough details and recommend escalation. "
-                    "Keep the tone aligned to the detected persona."
-                )
-                prompt = (
-                    f"Persona: {persona}\n"
-                    f"Persona guidance: {persona_instruction}\n"
-                    f"User query: {query}\n\n"
-                    f"Sources:\n{combined_text}\n\n"
-                    "Answer strictly from sources and include a short sources list."
-                )
-                resp = openai.ChatCompletion.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-                    temperature=0.0,
-                )
-                answer = resp["choices"][0]["message"]["content"].strip()
+                answer = self._openai_answer(persona, query, persona_instruction, combined_text)
             except Exception:
                 answer = (
                     "I found relevant documentation, but there was an issue generating a final summary. "
                     "Use the retrieved source text directly."
                 )
-        else:
-            if persona == "Technical Expert":
-                answer = (
-                    "I found relevant technical guidance in the knowledge base. Review the details below and follow the recommended steps:\n\n"
-                    + combined_text
-                )
-            elif persona == "Frustrated User":
-                answer = (
-                    "I understand how frustrating this is. Here is the information I found and the actions we can take next:\n\n"
-                    + combined_text
-                )
-            else:
-                answer = (
-                    "Here is a concise summary of the relevant information and a recommended next step:\n\n"
-                    + combined_text
-                )
 
-        return {"persona": persona, "answer": answer, "sources": list(dict.fromkeys(sources))}
+        if answer is None:
+            answer = self._default_answer(persona, combined_text)
+
+        return {"persona": persona, "answer": answer, "sources": sources}

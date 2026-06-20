@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Dict, List, Tuple
 
 DEFAULT_CONFIG = {
@@ -37,6 +38,16 @@ def load_escalation_config() -> Dict:
     return config
 
 
+def is_simple_interaction(text: str) -> bool:
+    normalized = text.strip().lower()
+    return bool(
+        re.fullmatch(
+            r"^(hi|hello|hey|hiya|thanks?|thank you|good (morning|afternoon|evening)|yo)[.!?]*$",
+            normalized,
+        )
+    )
+
+
 def should_escalate(
     retrieved: List[Dict],
     scores: List[float],
@@ -49,6 +60,8 @@ def should_escalate(
     user_text_lower = user_text.lower()
 
     if not retrieved or not scores:
+        if is_simple_interaction(user_text):
+            return False, "greeting"
         return True, "no_retrieval"
 
     top_score = max(scores)

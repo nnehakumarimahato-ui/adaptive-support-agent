@@ -2,7 +2,7 @@ import os
 import pickle
 from typing import List, Dict
 
-from sentence_transformers import SentenceTransformer
+# Delay importing heavy ML libraries until they're needed to avoid import-time failures
 import faiss
 from PyPDF2 import PdfReader
 try:
@@ -51,6 +51,11 @@ def chunk_text(text: str, max_chars: int = 800, overlap: int = 100) -> List[str]
 
 
 def build_index(docs_folder: str, model_name: str = "all-MiniLM-L6-v2", out_index_path: str = "data/index.faiss"):
+    try:
+        from sentence_transformers import SentenceTransformer
+    except Exception:
+        raise RuntimeError("sentence-transformers is required to build the index. Install requirements and try again.")
+
     model = SentenceTransformer(model_name)
     docs = load_documents(docs_folder)
     texts = []
