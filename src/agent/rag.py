@@ -16,9 +16,30 @@ from .ingest import load_documents, chunk_text
 OPENAI_KEY_ENV = "OPENAI_API_KEY"
 DEFAULT_MODEL = "all-MiniLM-L6-v2"
 PERSONA_INSTRUCTIONS = {
-    "Technical Expert": "Provide detailed technical analysis, root-cause reasoning, and step-by-step troubleshooting instructions.",
-    "Frustrated User": "Be empathetic, calm, simple, reassuring, and clearly outline actionable next steps.",
-    "Business Executive": "Be concise, impact-focused, minimize technical jargon, and include estimated resolution guidance.",
+    "Technical Expert": (
+        "Provide detailed technical analysis with:\n"
+        "- Root-cause reasoning and debugging steps\n"
+        "- Specific code examples, API parameters, and HTTP headers\n"
+        "- Configuration details and implementation guidance\n"
+        "- Reference actual source code where relevant\n"
+        "Keep the technical depth high and include all relevant details."
+    ),
+    "Frustrated User": (
+        "Be empathetic, calm, and reassuring:\n"
+        "- Acknowledge their frustration and validate their concern\n"
+        "- Use simple, non-technical language\n"
+        "- Provide 3-5 clear, actionable steps in order\n"
+        "- Use encouraging tone and offer immediate solutions\n"
+        "- Avoid technical jargon; explain simply"
+    ),
+    "Business Executive": (
+        "Be concise, data-driven, and impact-focused:\n"
+        "- Minimize technical details; focus on business impact\n"
+        "- Include estimated resolution times and uptime/SLA implications\n"
+        "- Provide a clear timeline and next steps\n"
+        "- Use professional, formal tone\n"
+        "- Keep response to 2-3 paragraphs maximum"
+    ),
 }
 
 
@@ -146,16 +167,38 @@ class RAG:
     def _default_answer(self, persona: str, combined_text: str) -> str:
         if persona == "Technical Expert":
             return (
-                "I found relevant technical guidance in the knowledge base. Review the details below and follow the recommended steps:\n\n"
-                + combined_text
+                "## Technical Guidance\n\n"
+                "I found the following technical documentation for your issue. "
+                "Review the implementation details and parameters below:\n\n"
+                + combined_text + "\n\n"
+                "**Next Steps:**\n"
+                "1. Review the parameters and configuration details above\n"
+                "2. Implement the recommended approach\n"
+                "3. If issues persist, escalate with debug logs and full error trace"
             )
         if persona == "Frustrated User":
             return (
-                "I understand how frustrating this is. Here is the information I found and the actions we can take next:\n\n"
-                + combined_text
+                "**I understand your frustration, and I'm here to help.**\n\n"
+                "Here's what we can do about this:\n\n"
+                + combined_text + "\n\n"
+                "**Simple Next Steps:**\n"
+                "1. Follow the guidance above in order\n"
+                "2. Give each step 1-2 minutes to complete\n"
+                "3. If the issue persists, we'll connect you with a specialist right away\n\n"
+                "You're not alone in this—we'll get it sorted! 🎯"
+            )
+        if persona == "Business Executive":
+            return (
+                "## Executive Summary\n\n"
+                + combined_text + "\n\n"
+                "**Business Impact:**\n"
+                "- Expected resolution time: 24-48 hours\n"
+                "- SLA compliance: Will be maintained\n"
+                "- Recommended action: Proceed with steps outlined above\n\n"
+                "**Contact:** A dedicated account manager will follow up within 2 hours."
             )
         return (
-            "Here is a concise summary of the relevant information and a recommended next step:\n\n"
+            "Here is the relevant information from our knowledge base:\n\n"
             + combined_text
         )
 

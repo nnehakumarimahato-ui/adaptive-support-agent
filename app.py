@@ -57,6 +57,7 @@ if st.button("Send") and query.strip():
         scores,
         query,
         convo_turns=1,
+        persona=persona,
         config=config,
     )
     st.markdown(f"**Sentiment:** {sentiment['label']} (score={sentiment['score']:.1f})")
@@ -74,9 +75,12 @@ if st.button("Send") and query.strip():
             [],
             "A human agent should review this issue and follow the provided sources.",
             escalation_reason=reason,
+            sentiment=sentiment,
+            confidence=confidence,
         )
-        st.markdown("**Handoff Summary**")
+        st.markdown("**Handoff Summary (JSON)**")
         st.json(summary)
+        st.info(f"🔴 **Priority:** {summary['metadata'].get('priority', 'MEDIUM')} | **Reason:** {reason.replace('_', ' ').title()}")
     elif reason == "greeting":
         st.info("No escalation is required for this greeting. Please describe your issue in more detail.")
     elif not formatted_sources:
